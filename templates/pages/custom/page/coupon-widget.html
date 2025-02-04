@@ -34,6 +34,7 @@
       .coupon-item {
         display: flex;
         justify-content: space-between;
+        align-items: center;
         padding: 0.5rem;
         border-bottom: 1px solid #eee;
       }
@@ -81,12 +82,43 @@
       .error-message {
         margin: 0.5rem 0;
       }
+
+      .coupon-info {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+      }
+
+      .delete-coupon {
+        background: none;
+        border: none;
+        color: #dc3545;
+        font-size: 1.5rem;
+        line-height: 1;
+        padding: 0.25rem 0.5rem;
+        cursor: pointer;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 2rem;
+      }
+
+      .delete-coupon:hover {
+        background-color: #fee2e2;
+      }
+
+      .delete-coupon:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
     </style>
   </head>
   <body>
     {{!-- Coupon Widget Component --}}
     <div x-data="couponWidget" class="coupon-widget">
       <h3>Applied Coupons</h3>
+      <p x-text="`This store is configured to support up to {{theme_settings.max_coupons}} coupons. The maximum number supported on BigCommerce is 15.`"></p>
 
       {{!-- Coupon Input Form --}}
       <form @submit.prevent="applyCoupon" class="coupon-form">
@@ -123,10 +155,21 @@
       >
         <template x-for="coupon in coupons" :key="coupon.entityId">
           <div class="coupon-item">
-            <div class="coupon-code" x-text="coupon.code"></div>
-            <div class="coupon-discount">
-              <span x-text="formatCurrency(coupon.discountedAmount.value, coupon.discountedAmount.currencyCode)"></span>
+            <div class="coupon-info">
+              <div class="coupon-code" x-text="coupon.code"></div>
+              <div class="coupon-discount">
+                <span x-text="formatCurrency(coupon.discountedAmount.value, coupon.discountedAmount.currencyCode)"></span>
+              </div>
             </div>
+            <button 
+              @click="removeCoupon(coupon.code)"
+              :disabled="removingCoupon === coupon.code"
+              class="delete-coupon"
+              title="Remove coupon"
+            >
+              <span x-show="removingCoupon !== coupon.code">×</span>
+              <span x-show="removingCoupon === coupon.code">...</span>
+            </button>
           </div>
         </template>
       </div>
@@ -149,6 +192,7 @@
           newCouponCode: '',
           submitting: false,
           submitError: null,
+          removingCoupon: null,
 
           formatCurrency(value, currencyCode) {
             return new Intl.NumberFormat('en-US', {
@@ -255,6 +299,63 @@
               this.submitError = 'Failed to apply coupon: ' + err.message;
             } finally {
               this.submitting = false;
+            }
+          },
+
+          async removeCoupon(code) {
+            this.removingCoupon = code;
+            this.submitError = null;
+
+            try {
+              const response = await fetch('/graphql', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer {{settings.storefront_api.token}}`
+                },
+                body: JSON.stringify({
+                  query: `
+                    mutation RemoveCheckoutCoupon($code: String!, $checkoutId: String!) {
+                      checkout {
+                        unapplyCheckoutCoupon(
+                          input: {
+                            checkoutEntityId: $checkoutId
+                            data: { couponCode: $code }
+                          }
+                        ) {
+                          checkout {
+                            coupons {
+                              entityId
+                              code
+                              couponType
+                              discountedAmount {
+                                currencyCode
+                                value
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  `,
+                  variables: {
+                    code: code,
+                    checkoutId: "{{cart_id}}"
+                  }
+                })
+              });
+
+              const data = await response.json();
+
+              if (data.errors) {
+                throw new Error(data.errors[0].message);
+              }
+
+              this.coupons = data.data.checkout.unapplyCheckoutCoupon.checkout.coupons;
+            } catch (err) {
+              this.submitError = 'Failed to remove coupon: ' + err.message;
+            } finally {
+              this.removingCoupon = null;
             }
           }
         }));

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Applied Coupons</title>
+    {{!-- Load Alpine.js from CDN --}}
+    <script
+      defer
+      src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"
+    ></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+      }
+      .coupon-widget {
+        padding: 1rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin: 1rem 0;
+      }
+
+      .loading-message,
+      .error-message,
+      .no-coupons {
+        padding: 0.5rem;
+        text-align: center;
+      }
+
+      .error-message {
+        color: #dc3545;
+      }
+
+      .coupon-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.5rem;
+        border-bottom: 1px solid #eee;
+      }
+
+      .coupon-item:last-child {
+        border-bottom: none;
+      }
+
+      .coupon-code {
+        font-weight: bold;
+      }
+
+      .coupon-discount {
+        color: #28a745;
+      }
+
+      .coupon-form {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+      }
+
+      .coupon-input {
+        flex: 1;
+        padding: 0.5rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 1rem;
+      }
+
+      .coupon-submit {
+        padding: 0.5rem 1rem;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      .coupon-submit:disabled {
+        background-color: #ccc;
+        cursor: not-allowed;
+      }
+
+      .error-message {
+        margin: 0.5rem 0;
+      }
+    </style>
+  </head>
+  <body>
+    {{!-- Coupon Widget Component --}}
+    <div x-data="couponWidget" class="coupon-widget">
+      <h3>Applied Coupons</h3>
+
+      {{!-- Coupon Input Form --}}
+      <form @submit.prevent="applyCoupon" class="coupon-form">
+        <input 
+          type="text" 
+          x-model="newCouponCode" 
+          placeholder="Enter coupon code"
+          :disabled="submitting"
+          class="coupon-input"
+        >
+        <button 
+          type="submit" 
+          :disabled="submitting || !newCouponCode"
+          class="coupon-submit"
+        >
+          <span x-show="!submitting">Apply</span>
+          <span x-show="submitting">Applying...</span>
+        </button>
+      </form>
+
+      {{!-- Submission Error --}}
+      <div x-show="submitError" class="error-message" x-text="submitError"></div>
+
+      {{!-- Loading State --}}
+      <div x-show="loading" class="loading-message">Loading coupons...</div>
+
+      {{!-- Error State --}}
+      <div x-show="error" class="error-message" x-text="error"></div>
+
+      {{!-- Coupons List --}}
+      <div
+        x-show="!loading && !error && coupons.length > 0"
+        class="coupons-list"
+      >
+        <template x-for="coupon in coupons" :key="coupon.entityId">
+          <div class="coupon-item">
+            <div class="coupon-code" x-text="coupon.code"></div>
+            <div class="coupon-discount">
+              <span x-text="formatCurrency(coupon.discountedAmount.value, coupon.discountedAmount.currencyCode)"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      {{!-- No Coupons State --}}
+      <div
+        x-show="!loading && !error && coupons.length === 0"
+        class="no-coupons"
+      >
+        No coupons currently applied
+      </div>
+    </div>
+
+    <script>
+      document.addEventListener("alpine:init", () => {
+        Alpine.data("couponWidget", () => ({
+          coupons: [],
+          loading: true,
+          error: null,
+          newCouponCode: '',
+          submitting: false,
+          submitError: null,
+
+          formatCurrency(value, currencyCode) {
+            return new Intl.NumberFormat('en-US', {
+              style: 'currency',
+              currency: currencyCode || 'USD'
+            }).format(value);
+          },
+
+          async init() {
+            try {
+              const response = await fetch("/graphql", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer {{settings.storefront_api.token}}`,
+                },
+                body: JSON.stringify({
+                  query: `
+                                query GetCoupons {
+                                    site {
+                                        checkout(entityId: "{{cart_id}}") {
+                                            coupons {
+                                                entityId
+                                                code
+                                                couponType
+                                                discountedAmount {
+                                                    currencyCode
+                                                    value
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            `,
+                }),
+              });
+
+              const data = await response.json();
+
+              if (data.errors) {
+                throw new Error(data.errors[0].message);
+              }
+
+              this.coupons = data.data.site.checkout.coupons;
+            } catch (err) {
+              this.error = "Failed to load coupons: " + err.message;
+            } finally {
+              this.loading = false;
+            }
+          },
+
+          async applyCoupon() {
+            this.submitting = true;
+            this.submitError = null;
+
+            try {
+              const response = await fetch('/graphql', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer {{settings.storefront_api.token}}`
+                },
+                body: JSON.stringify({
+                  query: `
+                    mutation ApplyCheckoutCoupon($code: String!, $checkoutId: String!) {
+                      checkout {
+                        applyCheckoutCoupon(
+                          input: {
+                            data: { couponCode: $code }
+                            checkoutEntityId: $checkoutId
+                          }
+                        ) {
+                          checkout {
+                            coupons {
+                              entityId
+                              code
+                              couponType
+                              discountedAmount {
+                                currencyCode
+                                value
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  `,
+                  variables: {
+                    code: this.newCouponCode,
+                    checkoutId: "{{cart_id}}"
+                  }
+                })
+              });
+
+              const data = await response.json();
+
+              if (data.errors) {
+                throw new Error(data.errors[0].message);
+              }
+
+              this.coupons = data.data.checkout.applyCheckoutCoupon.checkout.coupons;
+              this.newCouponCode = ''; // Clear the input
+            } catch (err) {
+              this.submitError = 'Failed to apply coupon: ' + err.message;
+            } finally {
+              this.submitting = false;
+            }
+          }
+        }));
+      });
+    </script>
+  </body>
+</html>

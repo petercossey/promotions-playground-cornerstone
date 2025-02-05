@@ -1,0 +1,417 @@
+{{#partial "head"}} {{!-- Load Alpine.js from CDN --}}
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+  }
+  .coupon-widget {
+    padding: 1rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin: 1rem 0;
+  }
+
+  .loading-message,
+  .error-message,
+  .no-coupons {
+    padding: 0.5rem;
+    text-align: center;
+  }
+
+  .error-message {
+    color: #dc3545;
+  }
+
+  .coupon-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem;
+    border-bottom: 1px solid #eee;
+  }
+
+  .coupon-item:last-child {
+    border-bottom: none;
+  }
+
+  .coupon-code {
+    font-weight: bold;
+  }
+
+  .coupon-discount {
+    color: #28a745;
+  }
+
+  .coupon-form {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .coupon-input {
+    flex: 1;
+    padding: 0.75rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 1rem;
+  }
+
+  .coupon-submit {
+    padding: 0.75rem 1rem;
+    background-color: #e9ecef;
+    color: #333;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1rem;
+    min-width: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .coupon-submit:not(:disabled) {
+    background-color: #98cee4;
+  }
+
+  .coupon-submit:hover:not(:disabled) {
+    background-color: #7ebfd4;
+  }
+
+  .coupon-submit:disabled {
+    background-color: #e9ecef;
+    color: #999;
+    cursor: not-allowed;
+  }
+
+  .error-message {
+    margin: 0.5rem 0;
+  }
+
+  .coupon-info {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+  }
+
+  .delete-coupon {
+    background: none;
+    border: none;
+    color: #dc3545;
+    font-size: 1.25rem;
+    line-height: 1;
+    padding: 0.25rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5rem;
+    opacity: 0.7;
+  }
+
+  .delete-coupon:hover:not(:disabled) {
+    opacity: 1;
+  }
+
+  .delete-coupon:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .max-coupons-warning {
+    color: #856404;
+    background-color: #fff3cd;
+    border: 1px solid #ffeeba;
+    padding: 0.5rem;
+    margin: 0.5rem 0;
+    border-radius: 4px;
+    text-align: center;
+  }
+
+  .coupon-input:disabled {
+    background-color: #f8f9fa;
+    cursor: not-allowed;
+  }
+</style>
+{{/partial}}
+
+{{#partial "page"}}
+
+{{> components/common/breadcrumbs breadcrumbs=breadcrumbs}}
+
+<main class="page">
+  {{#unless theme_settings.hide_page_heading }}
+  <h1 class="page-heading">{{ page.title }}</h1>
+  {{/unless}} {{{region name="page_builder_content"}}}
+
+  <div class="page-content page-content--centered">
+    {{!-- Coupon Widget Component --}}
+    <div x-data="couponWidget" class="coupon-widget">
+      <h3>Applied Coupons</h3>
+      <p
+        x-text="`This store is configured to support up to {{theme_settings.max_coupons}} coupons. The maximum number supported on BigCommerce is 15.`"
+      ></p>
+
+      {{!-- Coupon Input Form --}}
+      <form @submit.prevent="applyCoupon" class="coupon-form">
+        <input
+          type="text"
+          x-model="newCouponCode"
+          placeholder="Enter coupon code"
+          :disabled="submitting || coupons.length >= {{theme_settings.max_coupons}}"
+          class="coupon-input"
+        />
+        <button
+          type="submit"
+          :disabled="submitting || !newCouponCode || coupons.length >= {{theme_settings.max_coupons}}"
+          class="coupon-submit"
+        >
+          <span x-show="!submitting">Apply</span>
+          <span x-show="submitting">Applying...</span>
+        </button>
+      </form>
+
+      {{!-- Max Coupons Warning --}}
+      <div
+        x-show="coupons.length >= {{theme_settings.max_coupons}}"
+        class="max-coupons-warning"
+      >
+        Maximum number of coupons reached
+      </div>
+
+      {{!-- Submission Error --}}
+      <div
+        x-show="submitError"
+        class="error-message"
+        x-text="submitError"
+      ></div>
+
+      {{!-- Loading State --}}
+      <div x-show="loading" class="loading-message">Loading coupons...</div>
+
+      {{!-- Error State --}}
+      <div x-show="error" class="error-message" x-text="error"></div>
+
+      {{!-- Coupons List --}}
+      <div
+        x-show="!loading && !error && coupons.length > 0"
+        class="coupons-list"
+      >
+        <template x-for="coupon in coupons" :key="coupon.entityId">
+          <div class="coupon-item">
+            <div class="coupon-info">
+              <div class="coupon-code" x-text="coupon.code"></div>
+              <div class="coupon-discount">
+                <span
+                  x-text="formatCurrency(coupon.discountedAmount.value, coupon.discountedAmount.currencyCode)"
+                ></span>
+              </div>
+            </div>
+            <button
+              @click="removeCoupon(coupon.code)"
+              :disabled="removingCoupon === coupon.code"
+              class="delete-coupon"
+              title="Remove coupon"
+            >
+              <span x-show="removingCoupon !== coupon.code">×</span>
+              <span x-show="removingCoupon === coupon.code">...</span>
+            </button>
+          </div>
+        </template>
+      </div>
+
+      {{!-- No Coupons State --}}
+      <div
+        x-show="!loading && !error && coupons.length === 0"
+        class="no-coupons"
+      >
+        No coupons currently applied
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  document.addEventListener("alpine:init", () => {
+    Alpine.data("couponWidget", () => ({
+      coupons: [],
+      loading: true,
+      error: null,
+      newCouponCode: "",
+      submitting: false,
+      submitError: null,
+      removingCoupon: null,
+
+      formatCurrency(value, currencyCode) {
+        return new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: currencyCode || "USD",
+        }).format(value);
+      },
+
+      async init() {
+        try {
+          const response = await fetch("/graphql", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer {{settings.storefront_api.token}}`,
+            },
+            body: JSON.stringify({
+              query: `
+                    query GetCoupons {
+                        site {
+                            checkout(entityId: "{{cart_id}}") {
+                                coupons {
+                                    entityId
+                                    code
+                                    couponType
+                                    discountedAmount {
+                                        currencyCode
+                                        value
+                                    }
+                                }
+                            }
+                        }
+                    }
+            `,
+            }),
+          });
+
+          const data = await response.json();
+
+          if (data.errors) {
+            throw new Error(data.errors[0].message);
+          }
+
+          this.coupons = data.data.site.checkout.coupons;
+        } catch (err) {
+          this.error = "Failed to load coupons: " + err.message;
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      async applyCoupon() {
+        this.submitting = true;
+        this.submitError = null;
+
+        try {
+          const response = await fetch("/graphql", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer {{settings.storefront_api.token}}`,
+            },
+            body: JSON.stringify({
+              query: `
+                    mutation ApplyCheckoutCoupon($code: String!, $checkoutId: String!) {
+                      checkout {
+                        applyCheckoutCoupon(
+                          input: {
+                            data: { couponCode: $code }
+                            checkoutEntityId: $checkoutId
+                          }
+                        ) {
+                          checkout {
+                            coupons {
+                              entityId
+                              code
+                              couponType
+                              discountedAmount {
+                                currencyCode
+                                value
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  `,
+              variables: {
+                code: this.newCouponCode,
+                checkoutId: "{{cart_id}}",
+              },
+            }),
+          });
+
+          const data = await response.json();
+
+          if (data.errors) {
+            throw new Error(data.errors[0].message);
+          }
+
+          this.coupons =
+            data.data.checkout.applyCheckoutCoupon.checkout.coupons;
+          this.newCouponCode = ""; // Clear the input
+        } catch (err) {
+          this.submitError = "Failed to apply coupon: " + err.message;
+        } finally {
+          this.submitting = false;
+        }
+      },
+
+      async removeCoupon(code) {
+        this.removingCoupon = code;
+        this.submitError = null;
+
+        try {
+          const response = await fetch("/graphql", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer {{settings.storefront_api.token}}`,
+            },
+            body: JSON.stringify({
+              query: `
+                    mutation RemoveCheckoutCoupon($code: String!, $checkoutId: String!) {
+                      checkout {
+                        unapplyCheckoutCoupon(
+                          input: {
+                            checkoutEntityId: $checkoutId
+                            data: { couponCode: $code }
+                          }
+                        ) {
+                          checkout {
+                            coupons {
+                              entityId
+                              code
+                              couponType
+                              discountedAmount {
+                                currencyCode
+                                value
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  `,
+              variables: {
+                code: code,
+                checkoutId: "{{cart_id}}",
+              },
+            }),
+          });
+
+          const data = await response.json();
+
+          if (data.errors) {
+            throw new Error(data.errors[0].message);
+          }
+
+          this.coupons =
+            data.data.checkout.unapplyCheckoutCoupon.checkout.coupons;
+        } catch (err) {
+          this.submitError = "Failed to remove coupon: " + err.message;
+        } finally {
+          this.removingCoupon = null;
+        }
+      },
+    }));
+  });
+</script>
+
+{{/partial}}
+
+{{> layout/base-alt}}

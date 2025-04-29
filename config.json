@@ -43,6 +43,7 @@
     "Firefox ESR"
   ],
   "settings": {
+    "max_coupons": 5,
     "channels": [
       {
         "id": 1,
